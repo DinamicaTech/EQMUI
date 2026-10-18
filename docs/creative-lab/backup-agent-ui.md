@@ -19,6 +19,7 @@ Maqueta: https://claude.ai/artifact/Y3yqAMPp3tktzHNY2a8tXM
 - 2026-10-18 12:07 · El configurador es solo para Eudora Quick Mail: se quita el selector de aplicación. Se mantiene el campo de la carpeta de Eudora Quick Mail, en la pantalla Source and destinations, del que se detectan perfil, base de datos y ejecutable.
 - 2026-10-18 12:07 · Maqueta actualizada: en inglés, con la carpeta de Quick Mail, "min" junto a su campo en Schedule, "Run it when the computer is back on" en dos líneas, y las pantallas Email reports e History.
 - 2026-10-18 12:19 · Maqueta: Schedule recupera el marco de la tabla, la columna "If the computer was off" se ensancha para que su texto ocupe dos líneas y la línea de horas se ajusta al ancho de su marco; se añaden las pantallas Restore a backup y Advanced.
+- 2026-10-18 12:40 · Restore a backup ajustado al motor real: base de datos, ficheros del perfil y adjuntos (todos o solo los elegidos) se restauran por separado, y los ficheros sustituidos se guardan en `.restore-previous-<run>`.
 
 ## Requirements
 - 2026-10-18 09:50 · Quiero que hagas una propuesta de UI de C:\docs\QuickMail\BackupAgent\DinamicaBackupAgent.exe, que es un configurador de copias de seguridad para un gestor de correo electrónico (Eudora Quick Mail). Para poder abrirlo en modo configuración, tienes que invocarlo así: C:\docs\QuickMail\BackupAgent\DinamicaBackupAgent.exe /config /job c:\docs\quickmail\data\backup-job.json
@@ -62,6 +63,16 @@ Textos en inglés (decisión 2026-10-18 12:07); las pantallas se describen aquí
 
 En la maqueta, los resultados de la copia y de la ventana externa, el historial anterior a hoy, el resultado de Send test email y la lista de copias de Restore a backup son ilustrativos; el fallo de la prueba de hoy y de su aviso son los reales.
 Todas las secciones tienen ya su maqueta.
+
+### Contexto técnico (código del agente)
+Leído el 2026-10-18 del proyecto completo de Eudora Quick Mail en el equipo del propietario (repositorio GitHub DinamicaTech/EudoraQuickMail), carpeta `Tools/` y `docs/backup-agent-implementation.md`.
+- Proyectos: `DinamicaBackup.Core` (motor: ZIP, SQLite, catálogo, restauración, avisos), `DinamicaBackupAgent` (UI WPF construida por código en `AgentWindow*.cs`, credenciales, tarea de Windows) y sus tests. La nueva UI cambia solo `DinamicaBackupAgent`.
+- Quick Mail lo abre desde Tools → Backup and Restore con `/config /job <json>`; la tarea programada lo ejecuta con `/scheduled`, y `/watch` reabre Quick Mail tras una ejecución sin sesión.
+- Comunicación con Quick Mail por ficheros en el perfil: `.backup-access.lock`, `.backup-agent.lock`, `.backup-request.json` (petición con id y caducidad) y `.backup-response.json` (Quick Mail confirma y se cierra); `.restore-in-progress.json` bloquea el arranque tras una restauración interrumpida y `.backup-restored-profile.json` hace que arranque sin conexión. La nueva UI no toca este protocolo.
+- La tarea de Windows consulta el JSON cada 5 minutos: cambiar horarios no exige volver a registrarla. Solo hace falta registrarla la primera vez o si cambia el ejecutable, el job o la cuenta, y entonces pide la contraseña de Windows (no se guarda). Así es como Save puede ser atómico sin pedir contraseña en cada guardado.
+- Back up now y Test access solo funcionan si la tarea usa inicio de sesión con contraseña (evita el error 1219 de Windows); con una tarea interactiva, la UI debe desactivarlos y explicar por qué.
+- Restauración real: base de datos, ficheros del perfil y adjuntos (todos o seleccionados) por separado; confirmación explícita; los ficheros sustituidos quedan en `.restore-previous-<run>`.
+- El código aún contempla ProConta como aplicación futura; con la decisión de solo Eudora Quick Mail, la UI deja de mostrarlo.
 
 ### Pendiente
 - Que el propietario revise la maqueta actualizada.
