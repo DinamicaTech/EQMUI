@@ -91,6 +91,25 @@ internal static class WindowsScheduler
             if (scheduler != null && Marshal.IsComObject(scheduler)) Marshal.FinalReleaseComObject(scheduler);
         }
     }
+    public static TaskInfo? Inspect(string jobId)
+    {
+        object? scheduler = null;
+        try
+        {
+            scheduler = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service")!);
+            dynamic service = scheduler!; service.Connect();
+            dynamic task;
+            try { task = service.GetFolder("\\").GetTask("DinamicaBackup-" + jobId); }
+            catch (COMException ex) when (ex.HResult == unchecked((int)0x80070002)) { return null; }
+            dynamic action = task.Definition.Actions.Item(1);
+            return new TaskInfo((bool)task.Enabled, (int)task.Definition.Principal.LogonType == 1,
+                (string)action.Path, (string)action.Arguments, (string)(task.Definition.Principal.UserId ?? ""));
+        }
+        finally
+        {
+            if (scheduler != null && Marshal.IsComObject(scheduler)) Marshal.FinalReleaseComObject(scheduler);
+        }
+    }
     public static void Register(string jobPath, string jobId, string? user = null, string? password = null)
     {
         var stage = "Resolve Windows account";

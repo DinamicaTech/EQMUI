@@ -13,23 +13,23 @@ public sealed partial class AgentWindow
         ManualCommand? request = null;
         try
         {
-            EnsureSupportedApplication(); Save();
+            if (!Save()) return;
             if (kind != "Backup")
             {
                 var destination = kind == "TestAttachmentAccess" ? _job.AttachmentDestination : _job.Destination;
                 if (ApplicationDetection.UncShare(destination).Length == 0)
-                    throw new ArgumentException("Select a UNC destination such as \\\\nas\\backup\\folder first.");
+                    throw new ArgumentException("Test access checks a NAS folder: enter a UNC folder such as \\\\nas\\backup\\folder first.");
             }
             // No duplicate manual operation while a scheduled/local run owns the profile.
             using (ProfileLease.LockAgent(_job.ProfileDirectory)) { }
             store = new ManualCommands(_jobPath, _job.Id);
             store.RecoverAbandoned();
             _operation = new CancellationTokenSource();
-            _tabs.IsEnabled = false; _actions.IsEnabled = false; _cancel.IsEnabled = true; _progress.IsIndeterminate = true;
+            SetBusy(true); _progress.IsIndeterminate = true;
             var queue = store;
             await Task.Run(() => WindowsScheduler.RunManual(_jobPath, _job.Id,
                 () => request = queue.Submit(kind, ManualCommands.Hash(_jobPath))));
-            _status.Text = "Request sent to Windows Task Scheduler. Waiting for acceptance…";
+            SetStatus("Request sent to Windows Task Scheduler. Waiting for it to start…");
             var cancelSent = false;
             while (true)
             {
@@ -41,7 +41,7 @@ public sealed partial class AgentWindow
                     store.RecoverAbandoned();
                     var status = store.ReadStatus(request!.Id);
                     if (status?.Id != request.Id) throw new InvalidOperationException("Manual request status is unavailable.");
-                    _status.Text = (cancelSent && !status.Finished ? "Cancelling safely…\n" : "") + status.Detail;
+                    SetStatus((cancelSent && !status.Finished ? "Cancelling safely… " : "") + status.Detail);
                     _progress.IsIndeterminate = !status.Finished && status.Total == 0;
                     _progress.Maximum = Math.Max(1, status.Total); _progress.Value = status.Completed;
                     if (!status.Finished) continue;
@@ -54,7 +54,7 @@ public sealed partial class AgentWindow
                             foreach (var argument in _job.ApplicationArguments) start.ArgumentList.Add(argument);
                             Process.Start(start);
                         }
-                        catch (Exception ex) { _status.Text += "\nCould not reopen application: " + ex.Message; }
+                        catch (Exception ex) { SetStatus(_status.Text + " Quick Mail could not be reopened: " + ex.Message, Ui.AmberInk); }
                     }
                     break;
                 }
@@ -67,12 +67,13 @@ public sealed partial class AgentWindow
             {
                 try { store.Cancel(request.Id); } catch (IOException) { }
             }
-            _status.Text = "Request failed: " + ex.Message;
+            SetStatus("Request failed: " + ex.Message, Ui.RedInk);
         }
         finally
         {
-            _operation?.Dispose(); _operation = null; _tabs.IsEnabled = true; _actions.IsEnabled = true;
-            _cancel.IsEnabled = false; _progress.IsIndeterminate = false;
+            var final = _status.Text;
+            _operation?.Dispose(); _operation = null; SetBusy(false);
+            SetStatus(final, _status.Foreground);
         }
     }
 }

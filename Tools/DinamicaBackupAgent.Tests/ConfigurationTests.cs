@@ -14,7 +14,7 @@ public sealed class ConfigurationTests
         System.IO.File.WriteAllText(System.IO.Path.Combine(root, ".backup-owner"), job.Id);
         var path = System.IO.Path.Combine(root, "job.json");
         JsonFiles.Write(path, job);
-        var window = new AgentWindow(job, path);
+        var window = new AgentWindow(job, path, new FakeTasks());
         try
         {
             var save = Field<Button>(window, "_saveButton");
@@ -23,27 +23,166 @@ public sealed class ConfigurationTests
             profile.Text += "-changed"; Assert.True(save.IsEnabled);
             profile.Text = job.ProfileDirectory; Assert.False(save.IsEnabled);
             profile.Text = ""; Assert.True(save.IsEnabled);
-            var saveMethod = typeof(AgentWindow).GetMethod("Save", BindingFlags.Instance | BindingFlags.NonPublic)!;
-            Assert.Throws<TargetInvocationException>(() => saveMethod.Invoke(window, null));
+            Assert.ThrowsAny<Exception>(() => window.Save());
             Assert.True(save.IsEnabled);
             profile.Text = System.IO.Path.Combine(root, "new-profile");
-            saveMethod.Invoke(window, null);
+            Assert.True(window.Save());
             Assert.False(save.IsEnabled);
             Assert.Equal(profile.Text, JsonFiles.Read<BackupJob>(path).ProfileDirectory);
             job.AttachmentNasCredential = "new-destination-credential";
             typeof(AgentWindow).GetMethod("UpdateSaveState", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
             Assert.True(save.IsEnabled);
-            saveMethod.Invoke(window, null);
+            window.Save();
             Assert.False(save.IsEnabled);
         }
         finally { window.Close(); SafePaths.DeleteOwnedDirectory(root, job.Id); }
     });
+
     [Fact] public Task NewConfigurationNeedsInitialSave() => InSta(() =>
     {
-        var window = new AgentWindow(new BackupJob(), System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json"));
+        var window = new AgentWindow(new BackupJob(), System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".json"), new FakeTasks());
         try { Assert.True(Field<Button>(window, "_saveButton").IsEnabled); }
         finally { window.Close(); }
     });
+
+    [Fact] public Task NavigationShowsTheEightScreensInOrder() => InSta(() =>
+    {
+        var window = new AgentWindow(new BackupJob(), UnusedPath(), new FakeTasks());
+        try
+        {
+            var nav = Field<StackPanel>(window, "_navPanel").Children.OfType<Button>().ToArray();
+            Assert.Equal(new[] { "Status", "Schedule", "Source and destinations", "Restore test", "Email reports", "History", "Restore a backup…", "Advanced" },
+                nav.Select(b => ((DockPanel)b.Content).Children.OfType<TextBlock>().Last().Text));
+            var content = Field<ContentControl>(window, "_content");
+            var pages = Field<Dictionary<Section, FrameworkElement>>(window, "_pages");
+            Assert.Same(pages[Section.Status], content.Content);
+            foreach (var section in Enum.GetValues<Section>())
+            {
+                window.Show(section);
+                Assert.Same(pages[section], content.Content);
+            }
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact] public Task EveryControlHasATooltip() => InSta(() =>
+    {
+        var window = new AgentWindow(new BackupJob(), UnusedPath(), new FakeTasks());
+        try
+        {
+            var missing = new List<string>();
+            foreach (var (section, page) in Field<Dictionary<Section, FrameworkElement>>(window, "_pages"))
+            {
+                window.Show(section);
+                foreach (var control in Descendants(page).OfType<Control>().Where(x => x is System.Windows.Controls.Primitives.ButtonBase or TextBox or ComboBox))
+                    if (control.ToolTip is null && control.Visibility == Visibility.Visible)
+                        missing.Add(section + ": " + control.GetType().Name + " " + Describe(control));
+            }
+            Assert.Empty(missing);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact] public Task NoApplicationSelectorAndQuickMailFolderInSources() => InSta(() =>
+    {
+        var job = new BackupJob { ApplicationType = "ProConta" };
+        var window = new AgentWindow(job, UnusedPath(), new FakeTasks());
+        try
+        {
+            var pages = Field<Dictionary<Section, FrameworkElement>>(window, "_pages");
+            Assert.DoesNotContain(pages.Values.SelectMany(Descendants).OfType<ComboBox>(), combo => combo.Items.OfType<object>().Any(x => x.ToString()!.Contains("ProConta")));
+            Assert.Contains(Descendants(pages[Section.Sources]).OfType<TextBlock>(), x => x.Text == "Eudora Quick Mail folder");
+            Assert.Equal("EQM", job.ApplicationType);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact] public Task PreserveCustomQueriesAndDefaultQueries() => InSta(() =>
+    {
+        var custom = new AgentWindow(new BackupJob { Probes = [new("Custom", "SELECT 1")] }, UnusedPath(), new FakeTasks());
+        var fresh = new AgentWindow(new BackupJob(), UnusedPath(), new FakeTasks());
+        try
+        {
+            var rows = Field<List<(TextBox Name, TextBox Sql)>>(custom, "_probeRows");
+            Assert.Equal(("Custom", "SELECT 1"), (rows.Single().Name.Text, rows.Single().Sql.Text));
+            Assert.Contains(Field<List<(TextBox Name, TextBox Sql)>>(fresh, "_probeRows"), x => x.Sql.Text == "SELECT MAX(date_ticks) FROM MessageSummary");
+        }
+        finally { custom.Close(); fresh.Close(); }
+    });
+
+    [Fact] public Task DestinationsHaveBrowseCredentialsAndTestAccess() => InSta(() =>
+    {
+        var window = new AgentWindow(new BackupJob(), UnusedPath(), new FakeTasks());
+        try
+        {
+            var sources = Field<Dictionary<Section, FrameworkElement>>(window, "_pages")[Section.Sources];
+            var labels = Descendants(sources).OfType<Button>().Select(x => x.Content as string).Where(x => x is "Browse…" or "Credentials…" or "Test access").ToArray();
+            Assert.Equal(2, labels.Count(x => x == "Credentials…"));
+            Assert.Equal(2, labels.Count(x => x == "Test access"));
+            Assert.True(labels.Count(x => x == "Browse…") >= 3); // Quick Mail folder plus both destinations
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact] public Task SaveRegistersTheTaskWhenAScheduleIsTurnedOnAndRollsBackOnFailure() => InSta(() =>
+    {
+        var root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "backup-atomic-test-" + Guid.NewGuid().ToString("N"));
+        var job = new BackupJob { ProfileDirectory = System.IO.Path.Combine(root, "profile") };
+        System.IO.Directory.CreateDirectory(root);
+        System.IO.File.WriteAllText(System.IO.Path.Combine(root, ".backup-owner"), job.Id);
+        var path = System.IO.Path.Combine(root, "job.json");
+        JsonFiles.Write(path, job);
+        var tasks = new FakeTasks { FailRegistration = true };
+        var window = new AgentWindow(job, path, tasks) { IdentityPrompt = _ => ("", "") };
+        try
+        {
+            var windowRow = Field<object>(window, "_windowRow");
+            var enabled = (CheckBox)windowRow.GetType().GetField("Enabled")!.GetValue(windowRow)!;
+            enabled.IsChecked = true;
+            var before = System.IO.File.ReadAllText(path);
+            Assert.ThrowsAny<Exception>(() => window.Save());
+            Assert.Equal(before, System.IO.File.ReadAllText(path));
+            Assert.True(Field<Button>(window, "_saveButton").IsEnabled);
+            tasks.FailRegistration = false;
+            Assert.True(window.Save());
+            Assert.Equal(1, tasks.Registrations);
+            Assert.True(JsonFiles.Read<BackupJob>(path).MaintenanceSchedule.Enabled);
+            Assert.False(Field<Button>(window, "_saveButton").IsEnabled);
+        }
+        finally { window.Close(); SafePaths.DeleteOwnedDirectory(root, job.Id); }
+    });
+
+    [Fact] public Task StatusShowsTheMissingRestoreTestFolderWithItsFix() => InSta(() =>
+    {
+        var job = new BackupJob { TestSchedule = { Enabled = true } };
+        var window = new AgentWindow(job, UnusedPath(), new FakeTasks());
+        try
+        {
+            var status = Field<Dictionary<Section, FrameworkElement>>(window, "_pages")[Section.Status];
+            Assert.Contains(Descendants(status).OfType<TextBlock>(), x => x.Text == "Restore test can't run");
+            Assert.Contains(Descendants(status).OfType<Button>(), x => x.Content as string == "Choose folder…");
+        }
+        finally { window.Close(); }
+    });
+
+    // ---- helpers
+
+    private static string Describe(Control control) => control switch
+    {
+        ContentControl { Content: string text } => "\"" + text + "\"",
+        ContentControl { Content: TextBlock block } => "\"" + block.Text + "\"",
+        TextBox box => "\"" + box.Text + "\"",
+        _ => ""
+    };
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(root).OfType<DependencyObject>())
+        {
+            yield return child;
+            foreach (var nested in Descendants(child)) yield return nested;
+        }
+    }
+    private static string UnusedPath() => System.IO.Path.Combine(System.IO.Path.GetTempPath(), "unused-backup-ui-test.json");
     private static T Field<T>(AgentWindow window, string name) => (T)typeof(AgentWindow).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
     private static Task InSta(Action action)
     {
@@ -51,73 +190,18 @@ public sealed class ConfigurationTests
         var thread = new Thread(() => { try { action(); completion.SetResult(); } catch (Exception ex) { completion.SetException(ex); } });
         thread.SetApartmentState(ApartmentState.STA); thread.Start(); return completion.Task;
     }
-    [Fact] public Task TabOrderAndNativeToggle() => InSta(() =>
+}
+
+internal sealed class FakeTasks : ITaskService
+{
+    public TaskInfo? Task { get; set; }
+    public bool FailRegistration { get; set; }
+    public int Registrations { get; private set; }
+    public TaskInfo? Inspect(string jobId) => Task;
+    public void Register(string jobPath, string jobId, string? user, string? password)
     {
-        var window = new AgentWindow(new BackupJob(), System.IO.Path.Combine(System.IO.Path.GetTempPath(), "unused-backup-ui-test.json"));
-        try
-        {
-            var tabs = Field<TabControl>(window, "_tabs");
-            Assert.Equal(new[] { "Application", "External backup windows", "Native Backup", "Notifications", "Restore test", "History" }, tabs.Items.Cast<TabItem>().Select(x => (string)x.Header));
-            var body = Field<StackPanel>(window, "_nativeSettings");
-            var toggle = Field<CheckBox>(window, "_nativeEnabled");
-            Assert.False(body.IsEnabled);
-            toggle.IsChecked = true; Assert.True(body.IsEnabled);
-            toggle.IsChecked = false; Assert.False(body.IsEnabled);
-            Assert.NotNull(toggle.ToolTip);
-        }
-        finally { window.Close(); }
-    });
-    [Fact] public Task HistoryUsesAvailableHeight() => InSta(() =>
-    {
-        var window = new AgentWindow(new BackupJob(), System.IO.Path.Combine(System.IO.Path.GetTempPath(), "unused-backup-ui-test.json"));
-        try
-        {
-            var tabs = Field<TabControl>(window, "_tabs");
-            var history = (TabItem)tabs.Items[5];
-            var panel = Assert.IsType<DockPanel>(history.Content);
-            var grid = Field<DataGrid>(window, "_history");
-            Assert.Same(grid, panel.Children[panel.Children.Count - 1]);
-            Assert.True(panel.LastChildFill); Assert.True(double.IsNaN(grid.Height));
-            tabs.SelectedItem = history;
-            // Lay out the tab content directly: a non-shown Window has no presentation source.
-            panel.Measure(new Size(850, 600)); panel.Arrange(new Rect(0, 0, 850, 600)); panel.UpdateLayout();
-            var largeHeight = grid.ActualHeight;
-            Assert.True(largeHeight > 400);
-            panel.Measure(new Size(850, 400)); panel.Arrange(new Rect(0, 0, 850, 400)); panel.UpdateLayout();
-            Assert.True(grid.ActualHeight < largeHeight);
-        }
-        finally { window.Close(); }
-    });
-    [Fact] public Task PreserveCustomQueriesAndDisableProConta() => InSta(() =>
-    {
-        var job = new BackupJob { Probes = [new("Custom", "SELECT 1")] };
-        var window = new AgentWindow(job, System.IO.Path.Combine(System.IO.Path.GetTempPath(), "unused-backup-ui-test.json"));
-        try
-        {
-            Assert.Equal("Custom | SELECT 1", Field<TextBox>(window, "_probesBox").Text);
-            Field<CheckBox>(window, "_nativeEnabled").IsChecked = true;
-            Field<ComboBox>(window, "_application").SelectedIndex = 1;
-            Assert.False(Field<StackPanel>(window, "_nativeSettings").IsEnabled);
-        }
-        finally { window.Close(); }
-    });
-    [Fact] public Task DefaultQueriesAndSeparatedDestinationButtons() => InSta(() =>
-    {
-        var job = new BackupJob();
-        var window = new AgentWindow(job, System.IO.Path.Combine(System.IO.Path.GetTempPath(), "unused-backup-ui-test.json"));
-        try
-        {
-            Assert.Contains("SELECT MAX(date_ticks) FROM MessageSummary", Field<TextBox>(window, "_probesBox").Text);
-            var body = Field<StackPanel>(window, "_nativeSettings");
-            var rows = body.Children.OfType<DockPanel>().ToArray();
-            Assert.Equal(2, rows.Length);
-            foreach (var row in rows)
-            {
-                var buttons = row.Children.OfType<StackPanel>().Single().Children.OfType<Button>().ToArray();
-                Assert.Equal(new[] { "Browse…", "Credentials…", "Test access" }, buttons.Select(x => (string)x.Content));
-                Assert.All(buttons, button => Assert.NotNull(button.ToolTip));
-            }
-        }
-        finally { window.Close(); }
-    });
+        if (FailRegistration) throw new InvalidOperationException("Windows task registration could not be completed.");
+        Registrations++;
+        Task = new TaskInfo(true, !string.IsNullOrEmpty(user), Environment.ProcessPath ?? "", SaveCoordinator.ExpectedArguments(jobPath), user ?? "");
+    }
 }

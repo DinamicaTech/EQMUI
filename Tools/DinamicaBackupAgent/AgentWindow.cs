@@ -2,211 +2,366 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using DinamicaBackup;
 using Microsoft.Win32;
 
 namespace DinamicaBackupAgent;
 
+/// <summary>
+/// Configuration window: a side navigation with one screen per task, a status bar and one Save that
+/// writes the configuration and registers the Windows task when needed.
+/// </summary>
 public sealed partial class AgentWindow : Window
 {
     private readonly BackupJob _job;
     private readonly string _jobPath;
+    private readonly ITaskService _tasks;
+    private readonly SaveCoordinator _saver;
     private readonly List<Action> _commit = [];
     private readonly List<Func<string>> _configurationValues = [];
-    private Button? _saveButton;
+    private readonly List<Action> _onEdit = [];
+    private readonly Dictionary<Section, FrameworkElement> _pages = [];
+    private readonly Dictionary<Section, Action> _onShow = [];
+    private readonly Dictionary<Section, (Button Button, Border Marker)> _nav = [];
+    private readonly ContentControl _content = new();
+    private readonly StackPanel _navPanel = new() { Margin = new Thickness(10, 16, 10, 16) };
+    private readonly TextBlock _status = new() { FontSize = 13, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center, Foreground = Ui.Muted };
+    private readonly ProgressBar _progress = new() { Height = 8, Width = 160, Visibility = Visibility.Collapsed, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 10, 0) };
+    private readonly Button _cancel = Ui.Button("Cancel", "Requests a safe stop. Quick Mail reopens once the operation has released its files.");
+    private readonly TextBlock _headerPath = new() { FontSize = 13, Foreground = Ui.Muted, VerticalAlignment = VerticalAlignment.Center };
+    private readonly DispatcherTimer _refresh = new() { Interval = TimeSpan.FromSeconds(30) };
+    private Button _saveButton = null!;
     private string? _savedConfiguration;
     private bool _needsInitialSave;
-    private readonly TabControl _tabs = new();
-    private readonly StackPanel _actions = new() { Orientation = Orientation.Horizontal };
-    private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(8) };
-    private readonly ProgressBar _progress = new() { Height = 10, Margin = new Thickness(8) };
-    private readonly Button _cancel = new() { Content = "Cancel / Reopen application", IsEnabled = false, Margin = new Thickness(8), Padding = new Thickness(10, 5, 10, 5) };
-    private readonly DataGrid _history = new() { IsReadOnly = true, AutoGenerateColumns = false, MinHeight = 180 };
+    private RegistrationNeed? _registration;
+    private Section _current = Section.Status;
     private CancellationTokenSource? _operation;
+    private List<RunResult> _runs = [];
+    /// <summary>Replaces the Windows account dialog (tests).</summary>
+    internal Func<string, (string User, string Password)?>? IdentityPrompt { get; set; }
+    private string _runsNote = "";
 
-    public AgentWindow(BackupJob job, string jobPath)
+    public AgentWindow(BackupJob job, string jobPath) : this(job, jobPath, new WindowsTaskService()) { }
+
+    internal AgentWindow(BackupJob job, string jobPath, ITaskService tasks)
     {
-        _job = job; _jobPath = Path.GetFullPath(jobPath);
-        Icon = System.Windows.Media.Imaging.BitmapFrame.Create(new Uri("pack://application:,,,/DinamicaBackupAgent;component/Assets/DinamicaBackup.ico"));
+        _job = job; _jobPath = Path.GetFullPath(jobPath); _tasks = tasks;
+        _saver = new SaveCoordinator(tasks, Environment.ProcessPath ?? "");
+        try { Icon = System.Windows.Media.Imaging.BitmapFrame.Create(new Uri("pack://application:,,,/DinamicaBackupAgent;component/Assets/DinamicaBackup.ico")); }
+        catch (Exception ex) when (ex is IOException or UriFormatException or NotSupportedException) { /* Icon is cosmetic. */ }
         var version = typeof(AgentWindow).Assembly.GetName().Version;
-        Title = $"Dinamica Backup Agent v{version?.ToString(3)} — " + job.Name; Width = 920; Height = 760; MinWidth = 720; MinHeight = 520;
-        var root = new DockPanel { Margin = new Thickness(10) }; Content = root;
-        var bottom = new StackPanel(); DockPanel.SetDock(bottom, Dock.Bottom); root.Children.Add(bottom);
-        bottom.Children.Add(_status); bottom.Children.Add(_progress); bottom.Children.Add(_actions); bottom.Children.Add(_cancel);
-        root.Children.Add(_tabs);
-        _cancel.Click += (_, _) => { _operation?.Cancel(); _status.Text = "Cancelling safely. Waiting for the current operation to release the profile…"; };
-        Closing += (_, e) => { if (_operation != null) { e.Cancel = true; _status.Text = "Use Cancel and wait for the operation to finish before closing."; } };
+        Title = $"Dinamica Backup Agent v{version?.ToString(3)} — " + job.Name;
+        Width = 1200; Height = 800; MinWidth = 1000; MinHeight = 640;
+        FontFamily = new FontFamily("Segoe UI"); FontSize = 13; Background = Ui.PageBack; Foreground = Ui.Ink;
+        NotificationAddresses.NormalizeLegacySender(job.Notification);
+        if (job.Probes.Count == 0) job.Probes = ApplicationDetection.EqmProbes();
         var originalConfiguration = System.Text.Json.JsonSerializer.Serialize(job, JsonFiles.Options);
-        BuildConfiguration();
+        // A job that is not EQM is migrated: this configurator only serves Eudora Quick Mail.
+        job.ApplicationType = "EQM";
+
+        var root = new DockPanel(); Content = root;
+        var header = new Border { Height = 38, Background = Ui.CardBack, BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(14, 0, 14, 0) };
+        header.Child = Ui.Row(10, new Border { Width = 14, Height = 14, CornerRadius = new CornerRadius(3), Background = Ui.Accent },
+            new TextBlock { Text = "Dinamica Backup Agent · Eudora Quick Mail", FontWeight = FontWeights.Medium, VerticalAlignment = VerticalAlignment.Center }, _headerPath);
+        DockPanel.SetDock(header, Dock.Top); root.Children.Add(header);
+
+        var footer = new Border { Height = 56, Background = Ui.CardBack, BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(18, 0, 18, 0) };
+        var footerGrid = Ui.Columns(0, -1, -1, -1);
+        _saveButton = Ui.Button("Save", "Saves every change in one step. When the schedules need it, it also registers the Windows task, asking for the Windows account first. If anything fails, nothing changes.", Ui.Kind.Primary);
+        _saveButton.Margin = new Thickness(10, 0, 0, 0); _saveButton.Click += (_, _) => Guard(() => Save());
+        _cancel.Visibility = Visibility.Collapsed;
+        _cancel.Click += (_, _) => { _operation?.Cancel(); SetStatus("Cancelling safely. Waiting for the current operation to release Quick Mail's files…"); };
+        Ui.Place(footerGrid, _status, 0, 0); Ui.Place(footerGrid, _progress, 0, 1); Ui.Place(footerGrid, _cancel, 0, 2); Ui.Place(footerGrid, _saveButton, 0, 3);
+        footer.Child = footerGrid; DockPanel.SetDock(footer, Dock.Bottom); root.Children.Add(footer);
+
+        var nav = new Border { Width = 220, Background = Ui.NavBack, BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 0, 1, 0), Child = _navPanel };
+        DockPanel.SetDock(nav, Dock.Left); root.Children.Add(nav);
+        root.Children.Add(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = _content, Padding = new Thickness(26, 20, 26, 20) });
+
+        BuildPages();
+        foreach (var section in Enum.GetValues<Section>()) AddNav(section);
+
+        Closing += (_, e) => { if (_operation != null) { e.Cancel = true; SetStatus("Cancel and wait for the operation to finish before closing."); } };
+        _refresh.Tick += (_, _) => { if (_current is Section.Status or Section.History && _operation == null) Show(_current); };
+        Loaded += (_, _) => _refresh.Start();
+        Closed += (_, _) => _refresh.Stop();
+
         _needsInitialSave = !File.Exists(_jobPath) || originalConfiguration != System.Text.Json.JsonSerializer.Serialize(job, JsonFiles.Options);
         _savedConfiguration = ConfigurationSnapshot();
+        _registration = _saver.Need(_job, _jobPath);
         UpdateSaveState();
-        _status.Text = "Configuration: " + _jobPath;
+        Show(Section.Status);
     }
-    private static List<string> Lines(string text) => text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-    private StackPanel Tab(string title)
+
+    internal static string SectionName(Section section) => section switch
     {
-        var panel = new StackPanel { Margin = new Thickness(10) };
-        _tabs.Items.Add(new TabItem { Header = title, Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = panel } });
-        return panel;
+        Section.Status => "Status",
+        Section.Schedule => "Schedule",
+        Section.Sources => "Source and destinations",
+        Section.RestoreTest => "Restore test",
+        Section.Email => "Email reports",
+        Section.History => "History",
+        Section.Restore => "Restore a backup…",
+        _ => "Advanced"
+    };
+
+    private void BuildPages()
+    {
+        _pages[Section.Status] = BuildStatus();
+        _pages[Section.Schedule] = BuildSchedule();
+        _pages[Section.Sources] = BuildSources();
+        _pages[Section.RestoreTest] = BuildRestoreTest();
+        _pages[Section.Email] = BuildEmail();
+        _pages[Section.History] = BuildHistory();
+        _pages[Section.Restore] = BuildRestore();
+        _pages[Section.Advanced] = BuildAdvanced();
     }
-    private static void Info(Panel panel, string text) => panel.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 12), Foreground = Brushes.DimGray });
-    private TextBox Text(Panel panel, string label, Func<string> get, Action<string> set, bool multiline = false)
+
+    private void AddNav(Section section)
     {
-        panel.Children.Add(new TextBlock { Text = label, Margin = new Thickness(0, 8, 0, 3) });
-        var box = new TextBox { Text = get(), AcceptsReturn = multiline, MinHeight = multiline ? 62 : 26, VerticalScrollBarVisibility = multiline ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled };
-        Help(box, label); panel.Children.Add(box); _commit.Add(() => set(box.Text.Trim()));
-        _configurationValues.Add(() => box.Text.Trim());
+        if (section == Section.Restore) _navPanel.Children.Add(new Border { Height = 1, Background = Ui.Line, Margin = new Thickness(4, 10, 4, 10) });
+        var marker = new Border { Visibility = Visibility.Collapsed, VerticalAlignment = VerticalAlignment.Center };
+        var label = new TextBlock { Text = SectionName(section), VerticalAlignment = VerticalAlignment.Center };
+        var content = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(marker, Dock.Right); content.Children.Add(marker); content.Children.Add(label);
+        var button = new Button { Template = Ui.FlatTemplate(), Content = content, Padding = new Thickness(12, 9, 12, 9), BorderThickness = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch, Background = Brushes.Transparent, Foreground = section == Section.Advanced ? Ui.Muted : Ui.Ink, Cursor = System.Windows.Input.Cursors.Hand };
+        button.Click += (_, _) => Show(section);
+        _navPanel.Children.Add(button);
+        _nav[section] = (button, marker);
+    }
+
+    /// <summary>Shows a screen and refreshes what it reads from disk.</summary>
+    internal void Show(Section section)
+    {
+        _current = section;
+        foreach (var (key, (button, _)) in _nav)
+        {
+            button.Background = key == section ? Ui.AccentSoft : Brushes.Transparent;
+            button.FontWeight = key == section ? FontWeights.SemiBold : FontWeights.Normal;
+        }
+        if (section is Section.Status or Section.History or Section.Email) LoadRuns();
+        if (_onShow.TryGetValue(section, out var refresh)) Guard(refresh);
+        _content.Content = _pages[section];
+        UpdateMarkers();
+    }
+
+    private void LoadRuns()
+    {
+        _runsNote = "";
+        List<RunResult> receipts;
+        var localOnly = string.IsNullOrWhiteSpace(_job.Destination);
+        try { receipts = Catalog.ReadRecentReceipts(_job, 1000, !localOnly); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            try { receipts = Catalog.ReadRecentReceipts(_job, 1000, false); } catch (Exception inner) when (inner is IOException or UnauthorizedAccessException or System.Text.Json.JsonException) { receipts = []; }
+            _runsNote = "Showing this computer's history only: the backup folder could not be read (" + ex.Message + ").";
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or ArgumentException) { receipts = []; _runsNote = "History could not be read: " + ex.Message; }
+        RunResult? last = null;
+        try
+        {
+            var path = Path.Combine(_job.ProfileDirectory, "backup-agent-last-run.json");
+            if (_job.ProfileDirectory.Length > 0 && File.Exists(path)) last = JsonFiles.Read<RunResult>(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidDataException) { }
+        _runs = History.Merge(receipts, last);
+    }
+
+    private List<Issue> CurrentIssues() => StatusAdvisor.Issues(_job, _runs, _registration, CredentialExists, DateTime.Now);
+
+    private void UpdateMarkers()
+    {
+        var issues = CurrentIssues();
+        foreach (var (section, (_, marker)) in _nav)
+        {
+            if (section == Section.Status)
+            {
+                var errors = issues.Count;
+                marker.Visibility = errors > 0 ? Visibility.Visible : Visibility.Collapsed;
+                marker.Background = issues.Any(x => x.Severity == Severity.Error) ? Ui.Red : Ui.Amber; marker.CornerRadius = new CornerRadius(9); marker.Padding = new Thickness(7, 1, 7, 1);
+                marker.Child = new TextBlock { Text = errors.ToString(), Foreground = Brushes.White, FontSize = 11 };
+                continue;
+            }
+            var mine = issues.Where(x => x.Fix == section).ToArray();
+            marker.Visibility = mine.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            marker.Child = null; marker.Width = 8; marker.Height = 8; marker.CornerRadius = new CornerRadius(4);
+            marker.Background = mine.Any(x => x.Severity == Severity.Error) ? Ui.Red : Ui.Amber;
+        }
+        _headerPath.Text = string.IsNullOrWhiteSpace(_job.ApplicationDirectory) ? Path.GetDirectoryName(_job.ApplicationPath) ?? "" : _job.ApplicationDirectory;
+    }
+
+    // ---- Fields bound to the job: each one commits on Save and takes part in change tracking.
+
+    private void Track(Action commit, Func<string> value)
+    {
+        _commit.Add(commit); _configurationValues.Add(value);
+    }
+    private TextBox Field(Func<string> get, Action<string> set, double width, string tip, bool mono = false, bool multiline = false)
+    {
+        var box = Ui.Box(width, tip, mono);
+        box.Text = get();
+        if (multiline) { box.AcceptsReturn = true; box.TextWrapping = TextWrapping.NoWrap; box.MinHeight = 64; box.VerticalContentAlignment = VerticalAlignment.Top; box.VerticalScrollBarVisibility = ScrollBarVisibility.Auto; }
+        Track(() => set(box.Text.Trim()), () => box.Text.Trim());
         box.TextChanged += (_, _) => UpdateSaveState();
         return box;
     }
-    private TextBox Folder(Panel panel, string label, Func<string> get, Action<string> set, Action? credentials = null, Action? testAccess = null)
+    private TextBox Number(Func<int> get, Action<int> set, double width, string tip, string name, int min, int max)
     {
-        var box = Text(panel, label, get, set);
-        panel.Children.Remove(box);
-        var row = new DockPanel();
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal };
-        Button(buttons, "Browse…", () => { var dialog = new OpenFolderDialog(); if (dialog.ShowDialog(this) == true) { box.Text = dialog.FolderName; box.Focus(); } });
-        if (credentials != null) Button(buttons, "Credentials…", credentials);
-        if (testAccess != null) Button(buttons, "Test access", testAccess);
-        DockPanel.SetDock(buttons, Dock.Right); row.Children.Add(buttons); row.Children.Add(box); panel.Children.Add(row);
+        var box = Field(() => get().ToString(System.Globalization.CultureInfo.InvariantCulture), x =>
+        {
+            if (!int.TryParse(x, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var value) || value < min || value > max)
+                throw new FormatException(name + " must be a whole number from " + min + " to " + max + ".");
+            set(value);
+        }, width, tip);
+        box.TextAlignment = TextAlignment.Right;
         return box;
     }
-    private void Number(Panel panel, string label, Func<string> get, Action<string> set) => Text(panel, label, get, set);
-    private CheckBox Check(Panel panel, string label, Func<bool> get, Action<bool> set)
+    private CheckBox Toggle(string label, Func<bool> get, Action<bool> set, string tip)
     {
-        var check = new CheckBox { Content = label, IsChecked = get(), Margin = new Thickness(0, 10, 0, 4) };
-        Help(check, label); panel.Children.Add(check); _commit.Add(() => set(check.IsChecked == true));
-        _configurationValues.Add(() => check.IsChecked == true ? "true" : "false");
+        var check = new CheckBox { Content = new TextBlock { Text = label, TextWrapping = TextWrapping.Wrap }, IsChecked = get(), VerticalAlignment = VerticalAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center };
+        Ui.Tip(check, tip);
+        Track(() => set(check.IsChecked == true), () => check.IsChecked == true ? "true" : "false");
         check.Checked += (_, _) => UpdateSaveState(); check.Unchecked += (_, _) => UpdateSaveState();
         return check;
     }
-    private void Choice(Panel panel, string label, IEnumerable<string> values, Func<string> get, Action<string> set)
+    private ComboBox Pick(IEnumerable<string> values, Func<string> get, Action<string> set, double width, string tip)
     {
-        panel.Children.Add(new TextBlock { Text = label, Margin = new Thickness(0, 8, 0, 3) });
-        var combo = new ComboBox { ItemsSource = values.ToArray(), SelectedItem = get(), MinHeight = 26 }; Help(combo, label); panel.Children.Add(combo);
-        _commit.Add(() => set(combo.SelectedItem?.ToString() ?? ""));
-        _configurationValues.Add(() => combo.SelectedItem?.ToString() ?? "");
+        var combo = new ComboBox { ItemsSource = values.ToArray(), SelectedItem = get(), Width = width, VerticalAlignment = VerticalAlignment.Center, Padding = new Thickness(6, 4, 6, 4) };
+        Ui.Tip(combo, tip);
+        Track(() => set(combo.SelectedItem?.ToString() ?? ""), () => combo.SelectedItem?.ToString() ?? "");
         combo.SelectionChanged += (_, _) => UpdateSaveState();
+        return combo;
     }
-    private void ScheduleFields(Panel panel, string label, Schedule schedule, bool includeEnabled = true)
+    /// <summary>Two or more exclusive options drawn as a segmented control.</summary>
+    private (StackPanel Panel, Func<int> Selected, Action<int> Select) Segmented(string[] options, string[] tips, Func<int> get, Action<int> set)
     {
-        if (includeEnabled) Check(panel, label + " enabled", () => schedule.Enabled, x => schedule.Enabled = x);
-        Choice(panel, "Frequency", ["Daily", "Weekly", "Monthly"], () => schedule.Frequency, x => schedule.Frequency = x);
-        Text(panel, "Start time (local, HH:mm)", () => schedule.Time, x => schedule.Time = x);
-        Choice(panel, "Day of week", Enum.GetNames<DayOfWeek>(), () => schedule.Day.ToString(), x => schedule.Day = Enum.Parse<DayOfWeek>(x));
-        Number(panel, "Day of month (clamped to last day)", () => schedule.DayOfMonth.ToString(), x => schedule.DayOfMonth = int.Parse(x));
-        Check(panel, "Run missed execution when available", () => schedule.CatchUp, x => schedule.CatchUp = x);
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        var border = new Border { BorderBrush = Ui.FieldLine, BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(6), Child = panel, HorizontalAlignment = HorizontalAlignment.Left, ClipToBounds = true };
+        var selected = get();
+        var buttons = new List<Button>();
+        void Paint() { for (var i = 0; i < buttons.Count; i++) { buttons[i].Background = i == selected ? Ui.Accent : Ui.CardBack; buttons[i].Foreground = i == selected ? Brushes.White : Ui.Ink; } }
+        void Select(int index) { selected = index; Paint(); UpdateSaveState(); }
+        for (var i = 0; i < options.Length; i++)
+        {
+            var index = i;
+            var button = new Button { Template = Ui.FlatTemplate(), Content = options[i], Padding = new Thickness(12, 6, 12, 6), BorderThickness = new Thickness(i == 0 ? 0 : 1, 0, 0, 0), BorderBrush = Ui.FieldLine, Cursor = System.Windows.Input.Cursors.Hand };
+            Ui.Tip(button, tips[i]); button.Click += (_, _) => Select(index);
+            buttons.Add(button); panel.Children.Add(button);
+        }
+        Paint();
+        Track(() => set(selected), () => selected.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var outer = new StackPanel(); outer.Children.Add(border);
+        return (outer, () => selected, Select);
     }
-    private Button Button(Panel panel, string label, Action action)
-    {
-        var button = new Button { Content = label, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(2, 5, 2, 5), Padding = new Thickness(8, 4, 8, 4) };
-        Help(button, label); button.Click += (_, _) => Guard(action); panel.Children.Add(button); return button;
-    }
-    private void ActionButton(string label, Action action) => Button(_actions, label, action);
-    private void Guard(Action action) { try { action(); } catch (Exception ex) { MessageBox.Show(this, ex.Message, "Dinamica Backup Agent", MessageBoxButton.OK, MessageBoxImage.Error); } }
-    private void Commit() { foreach (var action in _commit) action(); }
+
     private string ConfigurationSnapshot() => System.Text.Json.JsonSerializer.Serialize(
         _configurationValues.Select(get => get()).Concat(new[] { _job.NasShare, _job.NasCredential, _job.AttachmentNasShare, _job.AttachmentNasCredential }));
+    private bool HasUnsavedChanges => _needsInitialSave || ConfigurationSnapshot() != _savedConfiguration;
+
     private void UpdateSaveState()
     {
-        if (_saveButton == null || _savedConfiguration == null) return;
-        _saveButton.IsEnabled = _needsInitialSave || ConfigurationSnapshot() != _savedConfiguration;
+        if (_savedConfiguration == null) return;
+        var changed = HasUnsavedChanges;
+        _saveButton.IsEnabled = _operation == null && (changed || _registration != null);
+        Ui.Tip(_saveButton, changed || _registration == null
+            ? "Saves every change in one step. When the schedules need it, it also registers the Windows task, asking for the Windows account first. If anything fails, nothing changes."
+            : "Registers the Windows task so the schedules run. " + _registration.Reason);
+        if (_operation == null) SetStatus(changed ? "Unsaved changes" : _registration != null ? "Saved, but the schedules are not running yet: " + _registration.Reason : "No unsaved changes", changed ? Ui.Ink : _registration != null ? Ui.AmberInk : Ui.Muted);
+        foreach (var refresh in _onEdit) refresh();
     }
-    private void Save()
+    private void SetStatus(string text, Brush? color = null) { _status.Text = text; _status.Foreground = color ?? Ui.Ink; }
+
+    private void Commit() { foreach (var action in _commit) action(); }
+
+    /// <summary>Atomic save: configuration plus, when needed, the Windows task. Returns false when cancelled.</summary>
+    internal bool Save(bool forceRegistration = false)
     {
-        Commit(); SafePaths.Validate(_job, _job.BackupSchedule.Enabled || _job.TestSchedule.Enabled);
-        JsonFiles.Write(_jobPath, _job);
-        _savedConfiguration = ConfigurationSnapshot(); _needsInitialSave = false; UpdateSaveState();
-        _status.Text = "Configuration saved at " + DateTime.Now.ToString("T") + ". Windows task registration is a separate action.";
+        Commit();
+        bool registered;
+        try { registered = _saver.Save(_job, _jobPath, IdentityPrompt ?? AskTaskIdentity, forceRegistration); }
+        catch (OperationCanceledException ex) { SetStatus(ex.Message, Ui.AmberInk); return false; }
+        _savedConfiguration = ConfigurationSnapshot(); _needsInitialSave = false;
+        _registration = _saver.Need(_job, _jobPath);
+        UpdateSaveState();
+        SetStatus("Saved at " + DateTime.Now.ToString("HH:mm") + (registered ? ". The Windows task is registered and the schedules are active." : "."), Ui.Green);
+        Show(_current);
+        return true;
     }
-    private void RefreshHistory()
+
+    /// <summary>Asks for the Windows account the task runs as. Null means the user cancelled.</summary>
+    private (string User, string Password)? AskTaskIdentity(string reason)
     {
-        Commit(); SafePaths.Validate(_job, false);
-        var localOnly = string.IsNullOrWhiteSpace(_job.Destination);
-        try
-        {
-            _history.ItemsSource = Catalog.ReadRecentReceipts(_job, 100, !localOnly);
-            _status.Text = "History refreshed using the current Windows access (read-only).";
-        }
-        catch (Exception ex) when (!localOnly && ex is IOException or UnauthorizedAccessException)
-        {
-            _history.ItemsSource = Catalog.ReadRecentReceipts(_job, 100, false);
-            _status.Text = "NAS history is unavailable with the current Windows access; showing local history only. " + ex.Message;
-        }
-    }
-    private void StoreCredential(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name)) throw new InvalidOperationException("Enter a credential name first.");
-        CredentialsDialog("Save protected credential: " + name, (user, password) => Secrets.Save(name, user, password));
-    }
-    private void RegisterTask()
-    {
-        EnsureSupportedApplication();
-        Save();
-        CredentialsDialog("Windows task identity (blank = current interactive user)", (user, password) =>
-        {
-            WindowsScheduler.Register(_jobPath, _job.Id, user, password);
-            _status.Text = "Windows task registered successfully. " + (string.IsNullOrWhiteSpace(user) ? "Runs while your Windows session is signed in, including when locked." : "Runs with the supplied Windows account, including when signed out.");
-            MessageBox.Show(this, _status.Text, "Windows task registered", MessageBoxButton.OK, MessageBoxImage.Information);
-        });
-    }
-    private void CredentialsDialog(string title, Action<string, string> save)
-    {
-        var window = new Window { Title = title, Owner = this, Width = 550, Height = 310, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-        var panel = new StackPanel { Margin = new Thickness(15) }; window.Content = panel;
-        if (title.StartsWith("Windows task", StringComparison.Ordinal))
-            Info(panel, "Current Windows account: " + System.Security.Principal.WindowsIdentity.GetCurrent().Name + ". Bare usernames are resolved on this computer. Leave both fields blank to use the current session. Use the account password, not a Windows Hello PIN.");
-        panel.Children.Add(new TextBlock { Text = "Username" }); var user = new TextBox { Margin = new Thickness(0, 5, 0, 10), ToolTip = "Username for this credential. For Windows task registration, leave blank to use the current interactive user." }; panel.Children.Add(user);
-        panel.Children.Add(new TextBlock { Text = "Password" }); var password = new PasswordBox { Margin = new Thickness(0, 5, 0, 10), ToolTip = "Password stored securely or passed to Windows Task Scheduler; never written to the backup configuration." }; panel.Children.Add(password);
-        var button = new Button { Content = "Save", Width = 100, ToolTip = "Save the protected credential or register the task with this identity." }; panel.Children.Add(button);
-        button.Click += (_, _) => { try { save(user.Text, password.Password); password.Clear(); window.DialogResult = true; } catch (Exception ex) { MessageBox.Show(window, ex.Message); } };
+        (string, string)? result = null;
+        var window = new Window { Title = "Windows account for the scheduled task", Owner = IsLoaded ? this : null, Width = 560, SizeToContent = SizeToContent.Height, WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize, FontFamily = FontFamily };
+        var panel = new StackPanel { Margin = new Thickness(18) }; window.Content = panel;
+        Ui.Add(panel, Ui.Text(reason + " Saving registers the Windows task that runs the schedules.", Ui.Ink, true));
+        Ui.Add(panel, Ui.Note("Current Windows account: " + System.Security.Principal.WindowsIdentity.GetCurrent().Name + ".\nWith a username and password, the task also runs while you are signed out, and Back up now and Test access are available. Leave both blank to run only while you are signed in. Use the account password, not a Windows Hello PIN."), 10);
+        Ui.Add(panel, Ui.Label("Username"), 14); var user = Ui.Box(double.NaN, "Windows username. A bare name is resolved on this computer. Leave blank to use the current session."); panel.Children.Add(user);
+        Ui.Add(panel, Ui.Label("Password"), 10);
+        var password = new PasswordBox { Padding = new Thickness(6, 4, 6, 4), BorderBrush = Ui.FieldLine }; Ui.Tip(password, "Passed to Windows Task Scheduler only; never written to the configuration file."); panel.Children.Add(password);
+        var ok = Ui.Button("Save and register", "Saves the configuration and registers the Windows task with this account.", Ui.Kind.Primary);
+        var cancel = Ui.Button("Cancel", "Nothing is saved.");
+        var buttons = Ui.Row(8, cancel, ok); buttons.HorizontalAlignment = HorizontalAlignment.Right; Ui.Add(panel, buttons, 16);
+        ok.Click += (_, _) => { result = (user.Text.Trim(), password.Password); password.Clear(); window.DialogResult = true; };
+        cancel.Click += (_, _) => window.DialogResult = false;
         window.ShowDialog();
+        return result;
     }
+
+    private void Guard(Action action)
+    {
+        try { action(); }
+        catch (Exception ex)
+        {
+            var message = ex is System.Reflection.TargetInvocationException { InnerException: { } inner } ? inner.Message : ex.Message;
+            SetStatus(message, Ui.RedInk);
+            if (IsLoaded) MessageBox.Show(this, message, "Dinamica Backup Agent", MessageBoxButton.OK, MessageBoxImage.Error);
+            else throw;
+        }
+    }
+
+    private void SetBusy(bool busy)
+    {
+        _content.IsEnabled = !busy; _navPanel.IsEnabled = !busy;
+        _cancel.Visibility = busy ? Visibility.Visible : Visibility.Collapsed; _cancel.IsEnabled = busy;
+        _progress.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        if (!busy) { _progress.IsIndeterminate = false; UpdateSaveState(); }
+        else _saveButton.IsEnabled = false;
+    }
+
+    /// <summary>Runs an operation in this process (external window, restore test, restore). Saves first.</summary>
     private async void Start(string kind, string? archive = null, string? destination = null, RestoreMode mode = RestoreMode.Database, IReadOnlyCollection<string>? selected = null, bool profileFiles = false)
     {
         if (_operation != null) return;
         try
         {
-            EnsureSupportedApplication();
-            Save();
-            _operation = new CancellationTokenSource(); _tabs.IsEnabled = false; _actions.IsEnabled = false; _cancel.IsEnabled = true;
-            var progress = new Progress<ProgressInfo>(p => { _status.Text = p.Stage; _progress.IsIndeterminate = p.Total == 0; _progress.Maximum = Math.Max(1, p.Total); _progress.Value = p.Completed; });
+            if (!Save()) return;
+            _operation = new CancellationTokenSource(); SetBusy(true);
+            var progress = new Progress<ProgressInfo>(p => { SetStatus(p.Stage); _progress.IsIndeterminate = p.Total == 0; _progress.Maximum = Math.Max(1, p.Total); _progress.Value = p.Completed; });
             var runner = Program.CreateRunner(_job, progress);
             var result = await Task.Run(() => runner.RunAsync(kind, _operation.Token, archive, destination, mode, selected, profileFiles));
-            _status.Text = result.Status + ": " + result.Detail + (result.Warnings.Count == 0 ? "" : Environment.NewLine + string.Join(Environment.NewLine, result.Warnings.Take(8)));
-            if (!string.IsNullOrEmpty(result.NotificationError)) _status.Text += "\nReport could not be sent: " + result.NotificationError;
+            var text = result.DisplayKind + " · " + Formatting.Result(result) + ": " + result.Detail
+                + (result.Warnings.Count == 0 ? "" : " " + string.Join(" ", result.Warnings.Take(3)))
+                + (string.IsNullOrEmpty(result.NotificationError) ? "" : " The email report was not sent: " + result.NotificationError);
+            _operation.Dispose(); _operation = null; SetBusy(false);
+            SetStatus(text, result.Status == "Success" ? Ui.Green : result.Status == "Failed" ? Ui.RedInk : Ui.AmberInk);
         }
-        catch (Exception ex) { _status.Text = "Failed: " + ex.Message; }
-        finally { _operation?.Dispose(); _operation = null; _tabs.IsEnabled = true; _actions.IsEnabled = true; _cancel.IsEnabled = false; _progress.IsIndeterminate = false; }
+        catch (Exception ex) { _operation?.Dispose(); _operation = null; SetBusy(false); SetStatus("Failed: " + ex.Message, Ui.RedInk); }
+        Show(_current);
     }
-    private void ChooseRestore()
+
+    private string? BrowseFolder(string current)
     {
-        EnsureSupportedApplication();
-        Save();
-        var dialog = new OpenFileDialog { Filter = "Backup ZIP (*.zip)|*.zip", InitialDirectory = _job.Destination };
-        if (dialog.ShowDialog(this) != true) return;
-        var manifest = BackupEngine.ReadManifest(dialog.FileName);
-        if (manifest.JobId != _job.Id) throw new InvalidDataException("The selected backup belongs to a different job.");
-        var window = new Window { Title = "Restore backup", Owner = this, Width = 750, Height = 600, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-        var panel = new StackPanel { Margin = new Thickness(15) }; window.Content = panel;
-        Info(panel, "Backup: " + manifest.CreatedUtc.ToLocalTime().ToString("g") + "\nSource: " + manifest.SourceProfile + "\nAttachments use the current mirror. Older files may no longer exist.");
-        Info(panel, "Restoring the database makes EQM start offline for review. Restoring profile files can also restore an old Scheduled queue; review it before sending mail again.");
-        var mode = new ComboBox { ItemsSource = Enum.GetValues<RestoreMode>(), SelectedItem = RestoreMode.Database, Margin = new Thickness(0, 5, 0, 10) }; panel.Children.Add(mode);
-        var profile = new CheckBox { Content = "Also restore profile configuration files from ZIP", Margin = new Thickness(0, 5, 0, 10) }; panel.Children.Add(profile);
-        panel.Children.Add(new TextBlock { Text = "Restore destination" }); var destination = new TextBox { Text = _job.ProfileDirectory, Margin = new Thickness(0, 5, 0, 10) }; panel.Children.Add(destination);
-        var browse = new Button { Content = "Browse destination…", HorizontalAlignment = HorizontalAlignment.Left }; panel.Children.Add(browse);
-        browse.Click += (_, _) => { var folder = new OpenFolderDialog(); if (folder.ShowDialog(window) == true) destination.Text = folder.FolderName; };
-        var list = new ListBox { ItemsSource = manifest.Attachments.Select(x => x.Path), SelectionMode = SelectionMode.Extended, Height = 230, Margin = new Thickness(0, 10, 0, 10) }; panel.Children.Add(list);
-        var restore = new Button { Content = "Review and restore…", HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(12, 6, 12, 6) }; panel.Children.Add(restore);
-        restore.Click += (_, _) =>
-        {
-            var selectedMode = (RestoreMode)mode.SelectedItem;
-            var paths = list.SelectedItems.Cast<string>().ToArray();
-            if (selectedMode == RestoreMode.SelectedAttachments && paths.Length == 0) { MessageBox.Show(window, "Select at least one attachment."); return; }
-            if (MessageBox.Show(window, "This will OVERWRITE matching live files.\n\nBackup: " + manifest.CreatedUtc.ToLocalTime().ToString("g") + "\nDestination: " + destination.Text + "\nMode: " + selectedMode + "\n\nPrevious replaced files will be retained in a recovery folder. Current attachments may differ from this historical database. Continue?", "Confirm restoration", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
-            window.Close(); Start("Restore", dialog.FileName, destination.Text, selectedMode, paths, profile.IsChecked == true);
-        };
-        window.ShowDialog();
+        var dialog = new OpenFolderDialog();
+        if (Directory.Exists(current)) dialog.InitialDirectory = current;
+        return dialog.ShowDialog(this) == true ? dialog.FolderName : null;
+    }
+
+    private static bool CredentialExists(string name)
+    {
+        try { _ = Secrets.Read(name); return true; }
+        catch (Exception) { return false; }
     }
 }

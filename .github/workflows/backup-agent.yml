@@ -22,3 +22,10 @@ jobs:
         run: dotnet test Tools/DinamicaBackup.Tests/DinamicaBackup.Tests.csproj -c Release
       - name: Agent tests
         run: dotnet test Tools/DinamicaBackupAgent.Tests/DinamicaBackupAgent.Tests.csproj -c Release
+      - name: Publish the agent
+        run: dotnet publish Tools/DinamicaBackupAgent/DinamicaBackupAgent.csproj -c Release -r win-x64 --self-contained false -o publish/DinamicaBackupAgent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DinamicaBackupAgent
+          path: publish/DinamicaBackupAgent
+          retention-days: 30
