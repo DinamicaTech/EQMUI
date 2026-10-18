@@ -1,0 +1,37 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.{cs,xaml}]
+indent_size = 4
+
+[*.{csproj,props,targets,iss}]
+indent_size = 2
+
+[*.{json,yml,yaml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.cs]
+# Redundant explicit initializers — intentional readability choice in models
+dotnet_diagnostic.CA1805.severity = none
+# FeatureFlag name — intentional; the type represents a feature flag
+dotnet_diagnostic.CA1711.severity = none
+# Locale-sensitive formatting — display strings intentionally use CurrentCulture
+dotnet_diagnostic.CA1305.severity = none
+# Interface-shaped APIs are deliberate seams for stores, services and tests.
+dotnet_diagnostic.CA1859.severity = none
+# Several instance members are consumed by WPF binding or preserve service APIs.
+dotnet_diagnostic.CA1822.severity = none
+# Existing async APIs retain their parameter order for source compatibility.
+dotnet_diagnostic.CA1068.severity = none
+# Explicit range exceptions keep parameter names and messages stable.
+dotnet_diagnostic.CA1512.severity = none
