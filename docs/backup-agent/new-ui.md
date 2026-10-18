@@ -1,14 +1,13 @@
 ---
 title: Nueva UI del configurador de copias
-status: draft
 depends_on: []
 threads:
   - Propuesta UI configurador de copias | https://claude.ai/code/project/chan_01EF2Q1ZApiaHyNnYdzJpsNX?thread=cmsg_01EF2Q1ZApiaHyNnYdzJpsNXVqwRcKRV1Qa3XTKmG84s44
 ---
 ## Summary
-Borrador (salido del laboratorio): implementar una nueva interfaz para DinamicaBackupAgent.exe, el configurador de copias de seguridad de Eudora Quick Mail, que se abre en modo configuración con `/config /job <ruta del backup-job.json>`.
-Propuesta en curso (maqueta de 8 pantallas, en inglés): Status con avisos que llevan a su solución, navegación lateral por tareas en vez de 6 pestañas, Schedule con las tres tareas juntas y una línea de tiempo, Source and destinations (carpeta de Eudora Quick Mail, destinos con el estado de su credencial y su acceso, retención), Restore test, Email reports, History, Restore a backup y Advanced.
-El propietario la valora como una gran mejora sobre lo existente y la ha pasado a borrador; se implementa en una copia del código del agente en este repositorio (`Tools/`), sin tocar EudoraQuickMail, y se devolverá a EudoraQuickMail cuando el propietario la valide.
+Nueva interfaz de DinamicaBackupAgent.exe, el configurador de copias de seguridad de Eudora Quick Mail, que se abre en modo configuración con `/config /job <ruta del backup-job.json>`.
+Implementada en la versión 0.2.0 (8 pantallas, en inglés): Status con avisos que llevan a su solución, navegación lateral por tareas en vez de 6 pestañas, Schedule con las tres tareas juntas y una línea de tiempo, Source and destinations (carpeta de Eudora Quick Mail, destinos con el estado de su credencial y su acceso, retención), Restore test, Email reports, History, Restore a backup y Advanced, con Save atómico.
+Validada por el propietario el 2026-10-18; el código está en la copia de trabajo de este repositorio (`Tools/`) y queda pendiente devolverlo a EudoraQuickMail.
 Maqueta: https://claude.ai/artifact/Y3yqAMPp3tktzHNY2a8tXM
 
 ## Decisions
@@ -23,6 +22,7 @@ Maqueta: https://claude.ai/artifact/Y3yqAMPp3tktzHNY2a8tXM
 - 2026-10-18 12:42 · Leaves the lab: draft. Se mueve de creative-lab/backup-agent-ui a backup-agent/new-ui, hijo del nuevo nodo backup-agent.
 - 2026-10-18 13:02 · Se implementa en este repositorio (EQMUI), en una copia del código del agente en `Tools/` (DinamicaBackup.Core, DinamicaBackupAgent y sus tests, copiados de EudoraQuickMail versión 0.1.3), para no tocar EudoraQuickMail ni el agente que usa Quick Mail. Cuando el propietario valide la nueva UI, se devuelve a DinamicaTech/EudoraQuickMail. Para probarla, el exe se compila en una carpeta aparte, nunca en C:\docs\QuickMail\BackupAgent. Sustituye a la ubicación que daba la línea draft (repositorio DinamicaTech/EudoraQuickMail).
 - 2026-10-18 13:40 · Primera implementación en `Tools/DinamicaBackupAgent` (versión 0.2.0): las 8 pantallas con navegación lateral, Save atómico (escribe la configuración y registra la tarea de Windows solo si hace falta; si el registro falla, devuelve el fichero a como estaba), avisos con causa y acción en Status, y el historial que también muestra la última ejecución aunque no dejara recibo. El motor (`DinamicaBackup.Core`) no cambia. Los tests de UI de la 0.1.3, que comprobaban las 6 pestañas, se sustituyen por tests equivalentes sobre las nuevas pantallas, más tests del Save atómico, la navegación y los avisos.
+- 2026-10-18 13:58 · El propietario valida la nueva UI (versión 0.2.0, probada desde C:\Temp\BackupAgentNuevo). Se integra en este repositorio; el siguiente paso es devolver el código a DinamicaTech/EudoraQuickMail.
 
 ## Requirements
 - 2026-10-18 09:50 · Quiero que hagas una propuesta de UI de C:\docs\QuickMail\BackupAgent\DinamicaBackupAgent.exe, que es un configurador de copias de seguridad para un gestor de correo electrónico (Eudora Quick Mail). Para poder abrirlo en modo configuración, tienes que invocarlo así: C:\docs\QuickMail\BackupAgent\DinamicaBackupAgent.exe /config /job c:\docs\quickmail\data\backup-job.json
