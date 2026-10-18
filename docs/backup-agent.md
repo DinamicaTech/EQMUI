@@ -7,10 +7,12 @@ threads:
 ## Summary
 DinamicaBackupAgent.exe, el agente de copias de seguridad de Eudora Quick Mail: un ejecutable aparte que Quick Mail abre desde Tools → Backup and Restore (`/config /job <backup-job.json>`) y que la tarea de Windows ejecuta (`/scheduled`).
 Hace copias ZIP completas de la base de datos y de los ficheros del perfil, un espejo de los adjuntos, ventanas para copias externas, pruebas de restauración, restauraciones y avisos por correo. Se coordina con Quick Mail mediante ficheros en el perfil (`.backup-request.json`, `.backup-response.json`, `.backup-access.lock`, `.backup-agent.lock`).
-Código en el repositorio DinamicaTech/EudoraQuickMail, carpeta `Tools/` (`DinamicaBackup.Core`, `DinamicaBackupAgent` y sus tests); documentación técnica en `docs/backup-agent-implementation.md` de ese repositorio.
-Hijos: `backup-agent/new-ui` (borrador de la nueva UI de configuración).
+Código en el repositorio DinamicaTech/EudoraQuickMail, carpeta `Tools/` (`DinamicaBackup.Core`, `DinamicaBackupAgent` y sus tests); documentación técnica en `docs/backup-agent-implementation.md` de ese repositorio. Copia de trabajo en este repositorio, carpeta `Tools/`, para implementar la nueva UI sin tocar EudoraQuickMail.
+Hijos: `backup-agent/new-ui` (nueva UI de configuración, versión 0.2.0, validada; pendiente de devolver a EudoraQuickMail).
 
 ## Decisions
+- 2026-10-18 13:58 · Nueva UI de configuración (0.2.0) validada en la copia de trabajo de `Tools/`; pendiente de devolverla a EudoraQuickMail.
+- 2026-10-18 13:02 · Copia del código del agente (versión 0.1.3) en `Tools/` de este repositorio para trabajar la nueva UI; se devuelve a EudoraQuickMail al validarla.
 - 2026-10-18 12:42 · Nodo creado para el configurador de copias, al pasar a borrador la idea de su nueva UI.
 - 2026-10-18 12:07 · Solo sirve a Eudora Quick Mail: se descarta usarlo para otras aplicaciones.
 
