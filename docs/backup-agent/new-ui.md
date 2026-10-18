@@ -1,14 +1,14 @@
 ---
 title: Nueva UI del configurador de copias
-status: idea
+status: draft
 depends_on: []
 threads:
   - Propuesta UI configurador de copias | https://claude.ai/code/project/chan_01EF2Q1ZApiaHyNnYdzJpsNX?thread=cmsg_01EF2Q1ZApiaHyNnYdzJpsNXVqwRcKRV1Qa3XTKmG84s44
 ---
 ## Summary
-Idea en debate: proponer una nueva interfaz para DinamicaBackupAgent.exe, el configurador de copias de seguridad de Eudora Quick Mail, que se abre en modo configuración con `/config /job <ruta del backup-job.json>`.
+Borrador (salido del laboratorio): implementar una nueva interfaz para DinamicaBackupAgent.exe, el configurador de copias de seguridad de Eudora Quick Mail, que se abre en modo configuración con `/config /job <ruta del backup-job.json>`.
 Propuesta en curso (maqueta de 8 pantallas, en inglés): Status con avisos que llevan a su solución, navegación lateral por tareas en vez de 6 pestañas, Schedule con las tres tareas juntas y una línea de tiempo, Source and destinations (carpeta de Eudora Quick Mail, destinos con el estado de su credencial y su acceso, retención), Restore test, Email reports, History, Restore a backup y Advanced.
-El propietario la valora como una gran mejora sobre lo existente; sigue siendo una idea.
+El propietario la valora como una gran mejora sobre lo existente y la ha pasado a borrador; queda pendiente de implementar en el repositorio DinamicaTech/EudoraQuickMail.
 Maqueta: https://claude.ai/artifact/Y3yqAMPp3tktzHNY2a8tXM
 
 ## Decisions
@@ -20,6 +20,7 @@ Maqueta: https://claude.ai/artifact/Y3yqAMPp3tktzHNY2a8tXM
 - 2026-10-18 12:07 · Maqueta actualizada: en inglés, con la carpeta de Quick Mail, "min" junto a su campo en Schedule, "Run it when the computer is back on" en dos líneas, y las pantallas Email reports e History.
 - 2026-10-18 12:19 · Maqueta: Schedule recupera el marco de la tabla, la columna "If the computer was off" se ensancha para que su texto ocupe dos líneas y la línea de horas se ajusta al ancho de su marco; se añaden las pantallas Restore a backup y Advanced.
 - 2026-10-18 12:40 · Restore a backup ajustado al motor real: base de datos, ficheros del perfil y adjuntos (todos o solo los elegidos) se restauran por separado, y los ficheros sustituidos se guardan en `.restore-previous-<run>`.
+- 2026-10-18 12:42 · Leaves the lab: draft. Se mueve de creative-lab/backup-agent-ui a backup-agent/new-ui, hijo del nuevo nodo backup-agent.
 
 ## Requirements
 - 2026-10-18 09:50 · Quiero que hagas una propuesta de UI de C:\docs\QuickMail\BackupAgent\DinamicaBackupAgent.exe, que es un configurador de copias de seguridad para un gestor de correo electrónico (Eudora Quick Mail). Para poder abrirlo en modo configuración, tienes que invocarlo así: C:\docs\QuickMail\BackupAgent\DinamicaBackupAgent.exe /config /job c:\docs\quickmail\data\backup-job.json
@@ -36,6 +37,17 @@ Maqueta: https://claude.ai/artifact/Y3yqAMPp3tktzHNY2a8tXM
 - 2026-10-18 12:19 · Como tenemos espacio en la pantalla 2, haz más ancha la columna 'It the computer was off' para que el texto de los checks ocupen solo dos lineas, no cinco como ahora
 - 2026-10-18 12:19 · En esa misma pantalla, la barra de las horas es algo más ancha que el frame que las contiene.
 - 2026-10-18 12:19 · Y ahora las pantallas de restore y advanced.
+- 2026-10-18 12:42 · Ok, pásalo a borrador
+- 2026-10-18 12:42 · answer: dónde va el borrador → Nodo propio (backup-agent, con el borrador como backup-agent/new-ui)
+- 2026-10-18 12:42 · draft: Implementar en DinamicaBackupAgent (repositorio DinamicaTech/EudoraQuickMail, carpeta Tools/DinamicaBackupAgent) la nueva UI de configuración según la maqueta https://claude.ai/artifact/Y3yqAMPp3tktzHNY2a8tXM y las decisiones de este nodo, sin cambiar el motor ni el protocolo de ficheros con Quick Mail.
+
+## Acceptance criteria
+- Las 8 pantallas de la maqueta (Status, Schedule, Source and destinations, Restore test, Email reports, History, Restore a backup, Advanced) existen en el agente, en inglés, y leen y escriben el mismo backup-job.json que hoy sin perder campos.
+- Save guarda la configuración y, solo cuando hace falta, registra o actualiza la tarea de Windows; si algo falla no cambia nada.
+- No hay selector de aplicación; la carpeta de Eudora Quick Mail se elige en Source and destinations y de ella se detectan perfil, base de datos y ejecutable.
+- Cada error visible (prueba de restauración, aviso por correo, acceso a destinos, tarea) explica la causa y ofrece la acción que lo arregla.
+- Cada control tiene tooltip y cada campo un ancho acorde a su contenido.
+- Los tests existentes de DinamicaBackupAgent.Tests y DinamicaBackup.Tests pasan, y hay tests nuevos para el Save atómico y la navegación entre pantallas.
 
 ## Debate
 
@@ -75,5 +87,4 @@ Leído el 2026-10-18 del proyecto completo de Eudora Quick Mail en el equipo del
 - El código aún contempla ProConta como aplicación futura; con la decisión de solo Eudora Quick Mail, la UI deja de mostrarlo.
 
 ### Pendiente
-- Que el propietario revise la maqueta actualizada.
-- Decidir si se convierte en borrador o se ejecuta; el código del configurador no está en este repositorio.
+- Ejecutar el borrador en el repositorio DinamicaTech/EudoraQuickMail cuando el propietario lo pida.
