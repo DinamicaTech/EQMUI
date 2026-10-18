@@ -7,7 +7,7 @@ threads:
 ---
 ## Summary
 Idea en debate: proponer una nueva interfaz para DinamicaBackupAgent.exe, el configurador de copias de seguridad de Eudora Quick Mail, que se abre en modo configuración con `/config /job <ruta del backup-job.json>`.
-Propuesta en curso (maqueta de 6 pantallas, en inglés): Status con avisos que llevan a su solución, navegación lateral por tareas en vez de 6 pestañas, Schedule con las tres tareas juntas y una línea de tiempo, Source and destinations (carpeta de Eudora Quick Mail, destinos con el estado de su credencial y su acceso, retención), Restore test, Email reports e History.
+Propuesta en curso (maqueta de 8 pantallas, en inglés): Status con avisos que llevan a su solución, navegación lateral por tareas en vez de 6 pestañas, Schedule con las tres tareas juntas y una línea de tiempo, Source and destinations (carpeta de Eudora Quick Mail, destinos con el estado de su credencial y su acceso, retención), Restore test, Email reports, History, Restore a backup y Advanced.
 El propietario la valora como una gran mejora sobre lo existente; sigue siendo una idea.
 Maqueta: https://claude.ai/artifact/Y3yqAMPp3tktzHNY2a8tXM
 
@@ -18,6 +18,7 @@ Maqueta: https://claude.ai/artifact/Y3yqAMPp3tktzHNY2a8tXM
 - 2026-10-18 12:07 · La UI del configurador va en inglés, como el resto de la aplicación.
 - 2026-10-18 12:07 · El configurador es solo para Eudora Quick Mail: se quita el selector de aplicación. Se mantiene el campo de la carpeta de Eudora Quick Mail, en la pantalla Source and destinations, del que se detectan perfil, base de datos y ejecutable.
 - 2026-10-18 12:07 · Maqueta actualizada: en inglés, con la carpeta de Quick Mail, "min" junto a su campo en Schedule, "Run it when the computer is back on" en dos líneas, y las pantallas Email reports e History.
+- 2026-10-18 12:19 · Maqueta: Schedule recupera el marco de la tabla, la columna "If the computer was off" se ensancha para que su texto ocupe dos líneas y la línea de horas se ajusta al ancho de su marco; se añaden las pantallas Restore a backup y Advanced.
 
 ## Requirements
 - 2026-10-18 09:50 · Quiero que hagas una propuesta de UI de C:\docs\QuickMail\BackupAgent\DinamicaBackupAgent.exe, que es un configurador de copias de seguridad para un gestor de correo electrónico (Eudora Quick Mail). Para poder abrirlo en modo configuración, tienes que invocarlo así: C:\docs\QuickMail\BackupAgent\DinamicaBackupAgent.exe /config /job c:\docs\quickmail\data\backup-job.json
@@ -30,6 +31,10 @@ Maqueta: https://claude.ai/artifact/Y3yqAMPp3tktzHNY2a8tXM
 - 2026-10-18 12:07 · el 'min' de la pantalla de programación ponlo justo al lado del txtbox '240', así no ocupará una línea extra y quedará verticalmente mejor alineado
 - 2026-10-18 12:07 · 'Ejecutarla al encenderlo' en dos líneas, no en tres
 - 2026-10-18 12:07 · Faltan las pantallas de avisos por correo e historial.
+- 2026-10-18 12:19 · El marco lo quité sin querer, puedes añadirlo de nuevo.
+- 2026-10-18 12:19 · Como tenemos espacio en la pantalla 2, haz más ancha la columna 'It the computer was off' para que el texto de los checks ocupen solo dos lineas, no cinco como ahora
+- 2026-10-18 12:19 · En esa misma pantalla, la barra de las horas es algo más ancha que el frame que las contiene.
+- 2026-10-18 12:19 · Y ahora las pantallas de restore y advanced.
 
 ## Debate
 
@@ -51,11 +56,12 @@ Textos en inglés (decisión 2026-10-18 12:07); las pantallas se describen aquí
 6. **Email reports**: el fallo del último envío con su causa y la acción para reintentarlo; servidor, puerto y seguridad (STARTTLS / SSL/TLS) en un selector; la cuenta con el estado de su contraseña; remitente; destinatarios como etiquetas; Send test email con el resultado al lado y una corrección propuesta.
 7. **History**: en hora local, filtros por tipo y "Problems only", duración y ficheros por ejecución; la fila seleccionada se despliega con la causa, el estado del aviso por correo, el id de la ejecución, la acción que lo arregla y Copy details; Export CSV….
 8. **Barra inferior**: indica si hay cambios sin guardar; Save solo se activa con cambios y actualiza a la vez la tarea de Windows; "Close and reopen Quick Mail" sustituye a "Cancel / Reopen application".
-9. **Advanced**: anular lo detectado (perfil, base de datos, ejecutable, argumentos, ficheros del perfil, carpetas de adjuntos), los comandos de PowerShell y "Recover interrupted restoration…".
-10. Cada campo con un ancho acorde a su contenido y cada control con su tooltip.
+9. **Restore a backup**: en tres pasos en una sola pantalla: elegir la copia (fecha, si se guarda como diaria, semanal o mensual, tamaño y si pasó una prueba de restauración), qué restaurar (base de datos, configuración y contactos, adjuntos que falten) y dónde (sustituir los datos actuales, guardando antes una copia de seguridad de ellos, o en otra carpeta para revisarla). La barra inferior resume lo que se va a hacer y Restore… pide confirmación. "Recover interrupted restoration…" pasa aquí, inactivo mientras no haya ninguna interrumpida.
+10. **Advanced**: los valores detectados de la carpeta de Quick Mail (perfil, base de datos, ejecutable, argumentos) con "Reset all to detected"; los ficheros del perfil como etiquetas, marcando los que no existen (hoy groups.json y snooze.json); las carpetas de adjuntos; los tres comandos de PowerShell con su tiempo máximo; y la cuenta con la que se ejecuta la tarea de Windows.
+11. Cada campo con un ancho acorde a su contenido y cada control con su tooltip.
 
-En la maqueta, los resultados de la copia y de la ventana externa, el historial anterior a hoy y el resultado de Send test email son ilustrativos; el fallo de la prueba de hoy y de su aviso son los reales.
-Restore a backup… y Advanced no tienen maqueta todavía.
+En la maqueta, los resultados de la copia y de la ventana externa, el historial anterior a hoy, el resultado de Send test email y la lista de copias de Restore a backup son ilustrativos; el fallo de la prueba de hoy y de su aviso son los reales.
+Todas las secciones tienen ya su maqueta.
 
 ### Pendiente
 - Que el propietario revise la maqueta actualizada.
