@@ -13,3 +13,4 @@ Rediseño de la interfaz de Eudora Quick Mail.
 - 2026-10-18 09:36 · Proyecto creado con Claude Visual Project.
 
 ## Requirements
+- 2026-10-28 10:19 · En el nodo raíz (`docs/README.md`) añade el enlace a este hilo en `threads` (" - Proyecto en Claude | "), sin quitar el del hilo de montaje.
