@@ -2,7 +2,7 @@
 title: Configurador de copias de seguridad
 depends_on: []
 threads:
-  - Propuesta UI configurador de copias | https://claude.ai/code/project/chan_01EF2Q1ZApiaHyNnYdzJpsNX?thread=cmsg_01EF2Q1ZApiaHyNnYdzJpsNXVqwRcKRV1Qa3XTKmG84s44
+  - 2026-10-18 09:51 · Propuesta UI configurador de copias | https://claude.ai/code/project/chan_01EF2Q1ZApiaHyNnYdzJpsNX?thread=cmsg_01EF2Q1ZApiaHyNnYdzJpsNXVqwRcKRV1Qa3XTKmG84s44
 ---
 ## Summary
 DinamicaBackupAgent.exe, el agente de copias de seguridad de Eudora Quick Mail: un ejecutable aparte que Quick Mail abre desde Tools → Backup and Restore (`/config /job <backup-job.json>`) y que la tarea de Windows ejecuta (`/scheduled`).
